@@ -20,6 +20,6 @@ cd $scriptpath
 import-module .\AzSLetsEncrypt.psm1
 
 
-New-AzsDnsCaaRecords -ResourceGroup $DNSResourceGroup -Region $Region -FQDN $FQDN -PaaS
-New-AzsPkiLECertificates @Params -Force -paas
+New-AzsDnsCaaRecords -ResourceGroup $DNSResourceGroup -Region $Region -FQDN $FQDN -PaaS -EventHubs
+New-AzsPkiLECertificates @Params -Force -paas -EventHubs
 

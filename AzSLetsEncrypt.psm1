@@ -1,5 +1,8 @@
+# v.02
+# uses Az Module instaed of AzureRM
+
 #Requires -RunAsAdministrator
-#Requires -Modules @{'ModuleName'='Posh-Acme';'ModuleVersion'='3.5.0'},@{'ModuleName'='AzureRM.Dns';'ModuleVersion'='5.0.3'} ,Microsoft.AzureStack.ReadinessChecker
+#Requires -Modules @{'ModuleName'='Posh-Acme';'ModuleVersion'='3.5.0'},@{'ModuleName'='Az.Dns';'ModuleVersion'='1.1.2'} ,Microsoft.AzureStack.ReadinessChecker
 function new-AzsPACert ($AzsCert, [switch]$LegacyCert, $Path, $azParams, $Force) {
     foreach ($Key in $AzsCert.Keys) {
         if (-not (Test-Path -Path "$Path\$Key")) {
@@ -68,7 +71,11 @@ function New-AzsDnsCaaRecords {
         [string]$FQDN,
         [string]$mailTo,
         [switch]$ADFS,
-        [switch]$PaaS
+        [switch]$PaaS,
+        [Switch]$EventHubs,
+        [Switch]$DataBoxEdge,
+        [Switch]$IoTHub,
+        [Switch]$SkipCore
     )
 
     function Create-CaaRecord ($ep,$FQDN, $ResourceGroup ) {
@@ -78,9 +85,9 @@ function New-AzsDnsCaaRecords {
             write-host "EPName:   $epName"
 
             $caarecords =@()
-            $caarecords += New-AzureRMDnsRecordConfig -CaaFlags "0" -CaaTag "iodef" -CaaValue "mailto:$mailTo"
-            $caarecords += New-AzureRMDnsRecordConfig -CaaFlags "0" -CaaTag "issue" -CaaValue "letsencrypt.org"
-            New-AzureRMDnsRecordSet -Name $epName -RecordType "CAA" -ZoneName $FQDN  -ResourceGroupName $ResourceGroup -Ttl 3600 -DnsRecords $caarecords
+            $caarecords += New-AzDnsRecordConfig -CaaFlags "0" -CaaTag "iodef" -CaaValue "mailto:$mailTo"
+            $caarecords += New-AzDnsRecordConfig -CaaFlags "0" -CaaTag "issue" -CaaValue "letsencrypt.org"
+            New-AzDnsRecordSet -Name $epName -RecordType "CAA" -ZoneName $FQDN  -ResourceGroupName $ResourceGroup -Ttl 3600 -DnsRecords $caarecords
             
         }
     }
@@ -114,28 +121,43 @@ function New-AzsDnsCaaRecords {
 
     $PaasEndpoints = @{
             'SQLAdapter'="dbadapter.$RegionName";
+            'AppDefault'="scm.appservice.$RegionName";
             'AppSvcWebDefault'="appservice.$RegionName";
             'AppSvcsso'="sso.appservice.$RegionName";
-            'AppSvcscm'="scm.appservice.$RegionName";
             'AppSvcftp'="ftp.appservice.$RegionName";
             'AppSvcapi'="api.appservice.$RegionName";
             'cloudapp'="$regionName.cloudapp";
     }
-        
-
-
-
-    Get-AzureRMDnsRecordSet -ResourceGroupName $ResourceGroup -ZoneName $FQDN -RecordType CAA
-
-    Create-CaaRecord -ep $AzsEndpoints -FQDN $FQDN -ResourceGroup $ResourceGroup
-
+    $EvHubEndPoints = @{
+        'EVHubsCert'="eventhub.$RegionName"
+    }
+    $DataBoxEdgeEndPoints = @{
+        'databoxedge'="*.databoxedge.$DNSZone,*.databoxedge.$DNSZone"
+    }
+    $IotHubEndPoints = @{
+        'mgmtiothub'="*.mgmtiothub.$DNSZone,*.mgmtiothub.$DNSZone"
+    }
+    
+    Get-AzDnsRecordSet -ResourceGroupName $ResourceGroup -ZoneName $FQDN -RecordType CAA
+    if (-not $SkipCore){
+        Create-CaaRecord -ep $AzsEndpoints -FQDN $FQDN -ResourceGroup $ResourceGroup
+    }
     if ($ADFS) {
         Create-CaaRecord -ep $ADFSEndpoints -FQDN $FQDN -ResourceGroup $ResourceGroup
     }
-
+    
     If ($PaaS) {
         Create-CaaRecord -ep $PaasEndpoints -FQDN $FQDN -ResourceGroup $ResourceGroup
-}
+    }
+    if ($EventHubs){
+        Create-CaaRecord -ep $EvHubEndPoints -FQDN $FQDN -ResourceGroup $ResourceGroup
+    }
+    if ($DataBoxEdge){
+         Create-CaaRecord -ep $DataBoxEdgeEndPoints -FQDN $FQDN -ResourceGroup $ResourceGroup
+    }
+    if ($IoTHub){
+         Create-CaaRecord -ep $IotHubEndPoints -FQDN $FQDN -ResourceGroup $ResourceGroup
+    }
 }
 
 function New-AzsPkiLECertificates {
@@ -159,12 +181,18 @@ param(
         [switch]$Staging,
         [Switch]$ADFS,
         [Switch]$PaaS,
+        [Switch]$EventHubs,
+        [Switch]$SkipCore,
+        [Switch]$DataBoxEdge,
+        [Switch]$IoTHub,
         [switch]$Force
     )
 
     # Requires the Posh-acme module
     # Requires Azure DNS Zone; Service Principal to create TXT records
     # https://github.com/rmbolger/Posh-ACME/blob/master/Posh-ACME/DnsPlugins/Azure-Readme.md
+
+
 
 
     # Set the LetsEncrpt environment according to your needs.  For testing, LE_STAGE
@@ -183,8 +211,15 @@ param(
 
     $DNSZone = "$RegionName.$FQDN"
     $secPfxPass = ConvertTo-SecureString -AsPlainText $PfxPass -Force
-    $CoreCertPath = "$CertPath\Core"
+    $CoreCertPath = "$CertPath\AAD"
+    If ($ADFS) {
+        $CoreCertPath = "$CertPath\ADFS"
+    }
+    
     $PaaSCertPath = "$CertPath\PaaS"
+    $EVHubsCertPath = "$CertPath\EventHubs"
+    $DBEHubsCertPath = "$CertPath\DataBoxEdge"
+    $IoTHubCertPath = "$CertPath\IoTHub"
 
 
     $SpPassword = ConvertTo-SecureString $ServicePrincipalSecret -AsPlainText -Force
@@ -223,20 +258,19 @@ param(
     if (-not (Test-Path -Path $CertPath)) {
         New-Item -ItemType Directory -Path $CertPath
     }
-
-    new-AzsPACert $AzsCommmonEndpoints -Path $CoreCertPath -azParams $azParams $Force
-    if ($ADFS) {
-        new-AzsPACert $AzsADFSEndpoints -Path $CoreCertPath -azParams $azParams $Force
-        write-debug "Testing ADFS Certificates"
-        Invoke-AzsCertificateValidation -CertificatePath $CoreCertPath -pfxPassword $secPfxPass -RegionName $RegionName -FQDN $FQDN -IdentitySystem ADFS 
+    If (-not $SkipCore){
+        new-AzsPACert $AzsCommmonEndpoints -Path $CoreCertPath -azParams $azParams $Force
+        if ($ADFS) {
+            new-AzsPACert $AzsADFSEndpoints -Path $CoreCertPath -azParams $azParams $Force
+            write-debug "Testing ADFS Certificates"
+            Invoke-AzsCertificateValidation -CertificatePath $CoreCertPath -pfxPassword $secPfxPass -RegionName $RegionName -FQDN $FQDN -IdentitySystem ADFS 
+        }
+        else {
+            # Validate the Certs for Azs
+            write-debug "Testing AAD Certificates"
+            Invoke-AzsCertificateValidation -CertificatePath $CoreCertPath -pfxPassword $secPfxPass -RegionName $RegionName -FQDN $FQDN -IdentitySystem AAD 
+        }
     }
-    else {
-        # Validate the Certs for Azs
-        write-debug "Testing AAD Certificates"
-        Invoke-AzsCertificateValidation -CertificatePath $CoreCertPath -pfxPassword $secPfxPass -RegionName $RegionName -FQDN $FQDN -IdentitySystem AAD 
-    }
-
-
     If ($PaaS) {
     
         #Create Certs for all possible PaaS endpoints as there is no cost :)
@@ -262,37 +296,72 @@ param(
         Invoke-AzsCertificateValidation -PaaSCertificates $PaaSCertificates -RegionName $RegionName -FQDN $FQDN
     }
 
+    If ($EventHubs){
+        #Create Certs for EventHubs Endpoints
+        $AZSEvHubEndPoints = @{
+            'EVHubsCert'="*.eventhub.$DNSZone,*.eventhub.$DNSZone"
+        }
+        new-AzsPACert $AZSEvHubEndPoints -Path $EVHubsCertPath -LegacyCert -azParams $azParams $Force
+        $EvHubCertificates = @{}
+        foreach ($key in $AZSEvHubEndPoints.Keys) {
+            $passHash = @{
+                'pfxPath'= "$EVHubsCertPath\$key\cert.pfx";
+                'pfxPassword' = $secPfxPass
+            }
+            $EvHubCertificates.Add($key,$passHash)
+            write-host "$EVHubsCertPath\$key\cert.pfx"
+        }
+        #Add capability to test Eventhub Certs when available
+    }
+    
+    If ($DataBoxEdge){
+        #Create Certs for Azure Stack Edge GW Endpoints
+        $DataBoxEdgeEndPoints = @{
+            'databoxedge'="*.databoxedge.$DNSZone,*.databoxedge.$DNSZone"
+        }
+        new-AzsPACert $DataBoxEdgeEndPoints -Path $DBEHubsCertPath -LegacyCert -azParams $azParams $Force
+        $DBEHubCertificates = @{}
+        foreach ($key in $DataBoxEdgeEndPoints.Keys) {
+            $passHash = @{
+                'pfxPath'= "$DBEHubsCertPath\$key\cert.pfx";
+                'pfxPassword' = $secPfxPass
+            }
+            $DBEHubCertificates.Add($key,$passHash)
+            write-host "$DBEHubsCertPath\$key\cert.pfx"
+        }
+        #Add capability to test DBE Certs when available
+    }
+        If ($IotHub){
+        #Create Certs for IoTHub Endpoints
+        $IotHubEndPoints = @{
+            'mgmtiothub'="*.mgmtiothub.$DNSZone,*.mgmtiothub.$DNSZone"
+        }
+        new-AzsPACert $IotHubEndPoints -Path $IoTHubCertPath -LegacyCert -azParams $azParams $Force
+        $IOTHubCertificates = @{}
+        foreach ($key in $IotHubEndPoints.Keys) {
+            $passHash = @{
+                'pfxPath'= "$IoTHubCertPath\$key\cert.pfx";
+                'pfxPassword' = $secPfxPass
+            }
+            $IOTHubCertificates.Add($key,$passHash)
+            write-host "$DBEHubsCertPath\$key\cert.pfx"
+        }
+        #Add capability to test DBE Certs when available
+    }
+
 
      <#
         .SYNOPSIS
             Create PKI Certificates using Lets Encrypt for Azure Stack and validates them for usage
 
         .DESCRIPTION
-            Uses the Posh-Acme module to create compatible Lets Encrypt PKI certificates for Azure Stack.  Used in conjunction with an Azure DNS zone 
+            Uses the Posh-Acme module to create compatible Lets Encrypt PKI certificates for Azure STack.  Used in conjunction with an Azure DNS zone 
 
         .PARAMETER RegionName
-            The Azure Stack region name to generate the certificates for. e.g. local
-
-        .PARAMETER ServicePrincpial
-            The Service Princiapl GUID that has access to the DNS Zone.
-
-        .PARAMETER ServicePrincpialSecret
-            The Service Princiapl Secret.
-
-        .PARAMETER pfxPass
-            Password for PFX files.
-
-        .PARAMETER SubscriptionId
-            SubscriptionId for the Azure Subscription hosting the DNS Zone.
-
-        .PARAMETER TenantId
-            TenantId for the Azure AD Tenant.
-
-        .PARAMETER CertPath
-            Path to store the generated certificates.
+            The Azure Stack region name to generate the certificates for.
 
         .PARAMETER FQDN
-            The FQDN for the Azure Stack deployment.  e.g. azurestack.external
+            The FQDN for the Azure Stack deployment.
 
         .PARAMETER Staging
             If specified, uses the Lets Encrypt staging environment for testing purposes.  It is not rate limited, so is preferrable to use this switch prior to moving to Porduction.
@@ -305,6 +374,18 @@ param(
 
         .PARAMETER Force
             Specifies the output file for which this function saves the response body. Enter a path and file name. If you omit the path, the default is the current location.
+
+        .PARAMETER SkipCore
+            Skip the creation of the core certificates.
+
+        .PARAMETER EventHubs
+            Create Certificates for EventHubs Resource Provider.
+        
+        .PARAMETER IoTHub
+            Create Certificates for IOT Hub Resource Provider.
+
+        .PARAMETER DataBoxEdge
+            Create Certificates for Azure Satck Edge (Data Box Edge) Resource Provider.
 
         .EXAMPLE
 
