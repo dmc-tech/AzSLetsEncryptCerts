@@ -1,5 +1,8 @@
-# v.03
-# uses Az Module instaed of AzureRM. Uses new readinessChecker
+# v.04
+# uses AzureRM. Uses new readinessChecker.  Readiness checker needs AzureRm as is written for Azure Stack
+
+#Requires -RunAsAdministrator
+#Requires -Modules @{'ModuleName'='Posh-Acme';'ModuleVersion'='3.5.0'},@{'ModuleName'='AzureRM.Dns';'ModuleVersion'='5.1.0'} ,@{'ModuleName'='Microsoft.AzureStack.ReadinessChecker';'ModuleVersion'='1.2002.1111.69'}
 
 #Requires -RunAsAdministrator
 #Requires -Modules @{'ModuleName'='Posh-Acme';'ModuleVersion'='3.5.0'},@{'ModuleName'='Az.Dns';'ModuleVersion'='1.1.2'} ,@{'ModuleName'='Microsoft.AzureStack.ReadinessChecker';'ModuleVersion'='1.2002.1111.69'}
