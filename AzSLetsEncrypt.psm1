@@ -1,10 +1,10 @@
 # v.04
-# uses AzureRM. Uses new readinessChecker.  Readiness checker needs AzureRm as is written for Azure Stack
+# uses Az. Uses new readinessChecker.  Readiness checker needs Az as is written for Azure Stack
 
 #Requires -RunAsAdministrator
-#Requires -Modules @{'ModuleName'='Posh-Acme';'ModuleVersion'='3.5.0'},@{'ModuleName'='AzureRM.Dns';'ModuleVersion'='5.1.0'} ,@{'ModuleName'='Microsoft.AzureStack.ReadinessChecker';'ModuleVersion'='1.2002.1111.69'}
+#Requires -Modules @{'ModuleName'='Posh-Acme';'ModuleVersion'='3.5.0'},@{'ModuleName'='Az.Dns';'ModuleVersion'='0.10.0'} ,@{'ModuleName'='Microsoft.AzureStack.ReadinessChecker';'ModuleVersion'='1.2100.1448.484'}
 
-# #Requires -Modules @{'ModuleName'='Posh-Acme';'ModuleVersion'='3.5.0'},@{'ModuleName'='Az.Dns';'ModuleVersion'='1.1.2'} ,@{'ModuleName'='Microsoft.AzureStack.ReadinessChecker';'ModuleVersion'='1.2002.1111.69'}
+# #Requires -Modules @{'ModuleName'='Posh-Acme';'ModuleVersion'='3.5.0'},@{'ModuleName'='Az.Dns';'ModuleVersion'='1.1.2'} ,@{'ModuleName'='Microsoft.AzureStack.ReadinessChecker';'ModuleVersion'='1.2100.1448.484'}
 function new-AzsPACert ($AzsCert, [switch]$LegacyCert, $Path, $azParams, $Force) {
     foreach ($Key in $AzsCert.Keys) {
         if (-not (Test-Path -Path "$Path\$Key")) {
@@ -25,10 +25,10 @@ function new-AzsPACert ($AzsCert, [switch]$LegacyCert, $Path, $azParams, $Force)
             # Renew Cert
             write-host "obtaining Renewal Cert: $Cert"
             if ($Force) {
-                Submit-Renewal -MainDomain $maindomain[0] -NewKey -Force
+                Submit-Renewal -MainDomain $maindomain[0]  -Force
             }
             else { 
-                Submit-Renewal -MainDomain $maindomain[0] -NewKey
+                Submit-Renewal -MainDomain $maindomain[0] 
             }
         }
         Else {
@@ -36,9 +36,11 @@ function new-AzsPACert ($AzsCert, [switch]$LegacyCert, $Path, $azParams, $Force)
             write-host "obtaining new Cert: $Cert"
             #write-host "New-PACertificate $maindomain -DnsPlugin Azure -PluginArgs $azParams -AcceptTOS -PfxPass "$PfxPass""
             if ($Force) {
+                Write-Debug('New-PACertificate {0} -DnsPlugin Azure -PluginArgs {1} -AcceptTOS -PfxPass "$PfxPass" -Force' -f $maindomain, $azParams )
                 $LECert = New-PACertificate $maindomain -DnsPlugin Azure -PluginArgs $azParams -AcceptTOS -PfxPass "$PfxPass" -Force
             }
             else {
+                Write-Debug('New-PACertificate {0} -DnsPlugin Azure -PluginArgs {1} -AcceptTOS -PfxPass "$PfxPass"' -f $maindomain, $azParams )
                 $LECert = New-PACertificate $maindomain -DnsPlugin Azure -PluginArgs $azParams -AcceptTOS -PfxPass "$PfxPass"
             }
             if ($LegacyCert) {
@@ -78,6 +80,7 @@ function New-AzsDnsCaaRecords {
         [Switch]$EventHubs,
         [Switch]$DataBoxEdge,
         [Switch]$IoTHub,
+        [Switch]$Acr,
         [Switch]$SkipCore
     )
 
@@ -132,7 +135,7 @@ function New-AzsDnsCaaRecords {
     }
     $DBAdapterEndpoints = @{
         'SQLAdapter'="dbadapter.$RegionName"
-}
+    }
     $EvHubEndPoints = @{
         'EVHubsCert'="eventhub.$RegionName"
     }
@@ -141,6 +144,9 @@ function New-AzsDnsCaaRecords {
     }
     $IotHubEndPoints = @{
         'mgmtiothub'="mgmtiothub.$RegionName"
+    }
+    $AcrEndPoints = @{
+        'ACR'="azsacr.$RegionName"
     }
     
     Get-AzDnsRecordSet -ResourceGroupName $ResourceGroup -ZoneName $FQDN -RecordType CAA
@@ -165,6 +171,9 @@ function New-AzsDnsCaaRecords {
     }
     if ($IoTHub){
          Create-CaaRecord -ep $IotHubEndPoints -FQDN $FQDN -ResourceGroup $ResourceGroup
+    }
+    if ($Acr){
+         Create-CaaRecord -ep $AcrEndPoints -FQDN $FQDN -ResourceGroup $ResourceGroup
     }
 }
 
@@ -194,6 +203,7 @@ param(
         [Switch]$SkipCore,
         [Switch]$DataBoxEdge,
         [Switch]$IoTHub,
+        [Switch]$Acr,
         [switch]$Force
     )
 
@@ -230,6 +240,7 @@ param(
     $EVHubsCertPath = "$CertPath\EventHubs"
     $DBEHubsCertPath = "$CertPath\DataboxEdge"
     $IoTHubCertPath = "$CertPath\IoTHub"
+    $AcrCertPath = "$CertPath\Acr"
 
 
     $SpPassword = ConvertTo-SecureString $ServicePrincipalSecret -AsPlainText -Force
@@ -307,7 +318,7 @@ param(
     If ($EventHubs){
         #Create Certs for EventHubs Endpoints
         $AZSEvHubEndPoints = @{
-            'EventHubs'="*.eventhub.$DNSZone,*.eventhub.$DNSZone"
+            'EventHubs'="*.eventhub.$DNSZone,eventhub.$DNSZone"
         }
         new-AzsPACert $AZSEvHubEndPoints -Path $CertPath -LegacyCert -azParams $azParams $Force
         Invoke-AzsCertificateValidation -CertificateType EventHubs -CertificatePath $EVHubsCertPath -pfxPassword $secPfxPass -RegionName $RegionName -FQDN $FQDN
@@ -317,20 +328,29 @@ param(
     If ($DataBoxEdge){
         #Create Certs for Azure Stack Edge GW Endpoints
         $DataBoxEdgeEndPoints = @{
-            'databoxedge'="*.databoxedge.$DNSZone,*.databoxedge.$DNSZone"
+            'databoxedge'="*.databoxedge.$DNSZone,databoxedge.$DNSZone"
         }
         new-AzsPACert $DataBoxEdgeEndPoints -Path $CertPath -LegacyCert -azParams $azParams $Force
         # Add Test when available
        
     }
     If ($IotHub){
-    #Create Certs for IoTHub Endpoints
-    $IotHubEndPoints = @{
-        'IoTHub'="*.mgmtiothub.$DNSZone,*.mgmtiothub.$DNSZone"
+        #Create Certs for IoTHub Endpoints
+        $IotHubEndPoints = @{
+            'IoTHub'="*.mgmtiothub.$DNSZone,mgmtiothub.$DNSZone"
+        }
+        new-AzsPACert $IotHubEndPoints -Path $CertPath -LegacyCert -azParams $azParams $Force
+        Invoke-AzsCertificateValidation -CertificateType IoTHub -CertificatePath $IoTHubCertPath -pfxPassword $secPfxPass -RegionName $RegionName -FQDN $FQDN
+        #Add capability to test DBE Certs when available
     }
-    new-AzsPACert $IotHubEndPoints -Path $CertPath -LegacyCert -azParams $azParams $Force
-    Invoke-AzsCertificateValidation -CertificateType IoTHub -CertificatePath $IoTHubCertPath -pfxPassword $secPfxPass -RegionName $RegionName -FQDN $FQDN
-    #Add capability to test DBE Certs when available
+    If ($Acr){
+        #Create Certs for IoTHub Endpoints
+        $AcrEndPoints = @{
+            'Acr'="*.azsacr.$DNSZone,azsacr.$DNSZone"
+        }
+        new-AzsPACert $AcrEndPoints -Path $CertPath -LegacyCert -azParams $azParams $Force
+        Invoke-AzsHubAzureContainerRegistryCertificateValidation  -CertificatePath $AcrCertPath -pfxPassword $secPfxPass -RegionName $RegionName -ExternalFQDN $FQDN
+        
     }
 
 
